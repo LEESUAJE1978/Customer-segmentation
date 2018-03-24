@@ -1,0 +1,166 @@
+---
+title: "Retail_RFM Analysis"
+author: "LEESUJAE"
+date: "2018년 3월 24일"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 데이터 출처 https://www.kaggle.com/regivm/retailtransactiondata
+
+### 1.필요 라이브러리 설치
+
+```{r }
+library(lubridate)
+library(xlsx)
+library(dplyr)
+library(doBy)
+library(data.table)
+
+```
+
+###2. 데이불 불러오기: 위의 링크 해놓은 캐글에서 데이터 다운 받은후 실행 
+
+```{r}
+Retail_Data_R<-read.csv("Retail_Data_Response.csv")
+Retail_Data_T<-read.csv("Retail_Data_Transactions.csv")
+```
+
+###3. 데이터 구조 확인
+```{r}
+c(str(Retail_Data_R),str(Retail_Data_T), dim(Retail_Data_R), dim(Retail_Data_T))
+```
+
+###4.  날짜 데이터 형식 변경하기: factor를 date형식으로
+```{r}
+Retail_Data_T$trans_date<-dmy(Retail_Data_T$trans_date)
+```
+
+###5. 고객수 확인
+```{r}
+c(length(Retail_Data_R$customer_id),length(unique(Retail_Data_T$customer_id)))
+```
+
+###6.구매기간 확인
+```{r}
+c(max(Retail_Data_T$trans_date),min(Retail_Data_T$trans_date))
+```
+
+###7.고객별 구매금액의 합계, 평균, 중위수, 구매횟수(*데이터에 NA 값이 있을 때는 na.rm=T 사용, length에는 적용 안됨)  
+```{r}
+Cust_Sum<-summaryBy(tran_amount~customer_id, data = Retail_Data_T, 
+                    FUN = c(sum, mean, median, length))
+head(Cust_Sum)
+```
+
+###8.컬럼 이름 변경: 컬럼 이름 축약해서 보기 편하게 하기 위해
+```{r}
+Cust_Sum<-rename(Cust_Sum, sum = tran_amount.sum, mean = tran_amount.mean,
+                             median= tran_amount.median, length=tran_amount.length)
+```
+
+###9.1 데이터 분포 보기-sum
+```{r}
+hist(Cust_Sum$sum)
+```
+
+###9.2 데이터분포 보기-mean
+```{r}
+hist(Cust_Sum$mean)
+```
+
+###9.3 데이터 분포보기- median
+```{r}
+hist(Cust_Sum$median)
+```
+
+###9.4 데이터 분포보기- length
+```{r}
+hist(Cust_Sum$length)
+```
+
+###10. 구매 데이터를 사용해 고객의 구매 주기를 계산
+###10.1. 구매데이터 고객별, 날짜별로 정렬
+```{r}
+Retail_Data_T<-Retail_Data_T[order(Retail_Data_T$customer_id, Retail_Data_T$trans_date),]
+head(Retail_Data_T)
+```
+
+###10.2. 각 고객의 구매일간 주기를 계산(첫번째 구매일과 두 번째 구매일간의 차이)
+```{r}
+Retail_Data_T$trans_date_lag<-shift(Retail_Data_T$trans_date, n=1, fill=NA, type = "lag")
+Retail_Data_T$trans_date_diff<-Retail_Data_T$trans_date - Retail_Data_T$trans_date_lag
+Retail_Data_T$trans_date_final<-ifelse(Retail_Data_T$customer_id == shift(Retail_Data_T$customer_id, n=1, fill = NA, type = "lag"),
+       Retail_Data_T$trans_date-shift(Retail_Data_T$trans_date, n=1, fill=NA, type = "lag"),
+       NA)
+head(Retail_Data_T)
+```
+
+###11. 고객별 구매주기 평균 계산
+```{r}
+Cust_Pattern<-summaryBy(trans_date_final~customer_id, data = Retail_Data_T, FUN= mean, na.rm =TRUE)
+head(Cust_Pattern)
+```
+
+###12.Retail_Data_R 데이터 병합
+```{r}
+Cust_Master<-merge((merge(Cust_Sum,Cust_Pattern,all.x=T,by="customer_id")),
+                   Retail_Data_R,all=T,by="customer_id")
+```
+
+###13. 데이터간 상관성 파악
+```{r}
+plot(Cust_Master[,2:length(Cust_Master)])
+```
+
+#RFM기분에 따른 고객 분류
+
+###14. 구매주기기준 고객 분류_H,M,L
+```{r}
+q1<-quantile(Cust_Master$trans_date_final.mean)
+Cust_Master$Recency<-ifelse(Cust_Master$trans_date_final.mean<q1[2],"H",
+                              ifelse(Cust_Master$trans_date_final.mean<q1[4],"M","L"))
+head(Cust_Master)
+```
+
+###15.구매횟수에 따른 고객 분류_H,M,L
+```{r}
+q2<-quantile(Cust_Master$length)
+Cust_Master$Frequency<-ifelse(Cust_Master$length<q2[2],"L",
+                              ifelse(Cust_Master$length<q2[4],"M","H"))
+head(Cust_Master)
+```
+
+###16. 구매 금액 기준 고객 분류_H, M, L
+```{r}
+q3<-quantile(Cust_Master$sum)
+Cust_Master$Monetary<-ifelse(Cust_Master$sum<q3[2],"L",
+                                          ifelse(Cust_Master$sum<q3[4],"M","H"))
+head(Cust_Master)
+```
+
+###17.RFM 기준으로 각 값의 평균과 횟수 구하기
+```{r}
+Result<-summaryBy(.~Recency+Frequency+Monetary, data=Cust_Master, FUN=c(mean,length))
+head(Result)
+```
+
+###18.분석에 필요한 컬럼만 선택하여 컬럼명과 순서 변경: 결과 인식을 용이하게 하기 위해
+```{r}
+names(Result)
+Result_F<-select(Result,-(contains("median")), -(starts_with("response")),-(starts_with("mean")))
+Result_F<-rename(Result_F, Monetary.mean=sum.mean, Frequency.mean=length.mean, 
+                 Recency.mean=trans_date_final.mean.mean, Monetary.length=sum.length,
+                 Frequency.length=length.length, Recency.length=trans_date_final.mean.length)
+
+Result_F<-Result_F[,c(1,2,3,6,5,4,9,8,7)]
+head(Result_F)
+```
+
+###19. 엑셀 파일로 추출하여 값 확인하기
+```{r}
+write.xlsx(Result_F, "RFM_Result.xlsx")
+```
